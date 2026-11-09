@@ -1,0 +1,12 @@
+spring:
+  datasource:
+    url: "jdbc:h2:file:${LIBRARY_DATA_PATH:./data/library};DB_CLOSE_ON_EXIT=FALSE;LOCK_TIMEOUT=5000"
+    username: sa
+    password: ""
+    hikari:
+      connection-init-sql: "SET TIME ZONE 'UTC'"
+  flyway:
+    locations: classpath:db/migration/h2
+library:
+  lock:
+    mode: local

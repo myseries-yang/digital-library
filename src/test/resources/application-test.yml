@@ -1,0 +1,15 @@
+spring:
+  datasource:
+    url: "jdbc:h2:mem:library-tests;DB_CLOSE_DELAY=-1;LOCK_TIMEOUT=5000"
+    username: sa
+    password: ""
+    hikari:
+      connection-init-sql: "SET TIME ZONE 'UTC'"
+  flyway:
+    locations: classpath:db/migration/h2
+library:
+  lock:
+    mode: local
+logging:
+  level:
+    com.example.library: WARN

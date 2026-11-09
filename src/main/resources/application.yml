@@ -1,0 +1,47 @@
+spring:
+  application:
+    name: digital-library
+  profiles:
+    default: demo
+  datasource:
+    hikari:
+      maximum-pool-size: 12
+      minimum-idle: 1
+      connection-timeout: 5000
+  thymeleaf:
+    cache: true
+  mvc:
+    problemdetails:
+      enabled: true
+server:
+  shutdown: graceful
+  port: ${PORT:8080}
+library:
+  transaction-timeout: 5s
+  lock:
+    wait-time: 1s
+    watchdog-timeout: 30s
+  redis:
+    address: ${LIBRARY_REDIS_ADDRESS:redis://localhost:6379}
+    password: ${LIBRARY_REDIS_PASSWORD:}
+    connect-timeout: 1s
+    command-timeout: 1s
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: always
+      probes:
+        enabled: true
+      group:
+        readiness:
+          include: readinessState,db
+logging:
+  pattern:
+    console: "%d{HH:mm:ss.SSS} %-5level [%thread] [request=%X{requestId:-none}] %logger{36} - %msg%n"
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html

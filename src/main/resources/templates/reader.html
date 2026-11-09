@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-CN" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>阅界 · 电子图书馆</title>
+    <link rel="stylesheet" th:href="@{/css/library.css}" href="/css/library.css">
+    <script type="module" th:src="@{/js/reader.js}" src="/js/reader.js"></script>
+</head>
+<body>
+<header class="site-header">
+    <a class="brand" href="/"><span class="brand-mark" aria-hidden="true">阅</span><span>阅界<small>DIGITAL LIBRARY</small></span></a>
+    <nav aria-label="主导航"><a class="active" href="/" aria-current="page">阅读空间</a><a href="/admin">图书管理</a><a href="/swagger-ui.html">API 文档 ↗</a></nav>
+</header>
+<main>
+    <section class="hero">
+        <div><p class="eyebrow">YOUR NEXT CHAPTER</p><h1>让好奇心，<br>找到下一本书。</h1><p class="hero-copy">浏览技术书目，用你的图书馆账号借阅。<br>每一次探索，都有迹可循。</p></div>
+        <aside class="account-panel">
+            <label for="account-select">当前图书馆账号</label>
+            <select id="account-select" disabled><option>正在加载账号…</option></select>
+            <div class="account-usage"><strong id="account-count">—</strong><span id="account-limit">正在读取借阅规则</span></div>
+            <p id="policy-note" class="muted">账号独立计算借阅额度。</p>
+        </aside>
+    </section>
+    <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
+    <section aria-labelledby="catalog-heading">
+        <div class="section-header">
+            <div><p class="eyebrow">EXPLORE THE COLLECTION</p><h2 id="catalog-heading">发现好书</h2></div>
+            <form id="search-form" class="search"><label class="sr-only" for="keyword">书名或作者</label><input id="keyword" maxlength="255" placeholder="搜索书名或作者"><button type="submit">搜索</button></form>
+        </div>
+        <div id="books" class="book-grid" aria-live="polite"><p class="empty">正在加载书目…</p></div>
+        <div class="pager"><span id="books-page">第 1 页</span><div><button id="books-prev" class="secondary" disabled>上一页</button><button id="books-next" class="secondary" disabled>下一页</button></div></div>
+    </section>
+    <section class="loans-section" aria-labelledby="loans-heading">
+        <div class="section-header"><div><p class="eyebrow">ON YOUR SHELF</p><h2 id="loans-heading">我的当前借阅</h2></div><button id="refresh" class="secondary">刷新数据</button></div>
+        <p class="section-note">逾期图书仍在书架上，归还后释放额度。</p>
+        <div class="table-wrap"><table><thead><tr><th>图书 / 借阅编号</th><th>借出时间</th><th>应还时间</th><th>状态</th><th class="right">操作</th></tr></thead><tbody id="loan-rows"><tr><td colspan="5" class="empty">正在加载借阅…</td></tr></tbody></table></div>
+        <div class="pager"><span id="loans-page">第 1 页</span><div><button id="loans-prev" class="secondary" disabled>上一页</button><button id="loans-next" class="secondary" disabled>下一页</button></div></div>
+    </section>
+</main>
+<footer><span>阅界 · 每一个账号，都有自己的阅读轨迹。</span><span>借阅时间按北京时间展示</span></footer>
+<dialog id="book-dialog" aria-labelledby="detail-title">
+    <div class="dialog-header"><p class="eyebrow">BOOK DETAILS</p><button id="close-dialog" class="secondary" aria-label="关闭详情">关闭</button></div>
+    <h2 id="detail-title"></h2><p id="detail-author" class="muted"></p><p id="detail-description" class="detail-copy"></p><p id="detail-licenses"></p>
+</dialog>
+</body>
+</html>

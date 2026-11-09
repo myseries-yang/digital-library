@@ -1,0 +1,1008 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "电子图书馆 / Digital Library",
+    "description": "按图书馆账号独立借阅。借还与当前借阅使用 X-Library-Account-Id。该请求头是演示身份约定，不是真实认证。时间使用 UTC ISO 8601，page 从零开始。错误为 application/problem+json，包含稳定 code 与 requestId。Redis 仅用于锁；数据关联由应用事务校验，不建立数据库外键。",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "/",
+      "description": "当前服务地址"
+    }
+  ],
+  "paths": {
+    "/api/admin/borrowing-policy": {
+      "put": {
+        "tags": [
+          "Borrowing Policy / 借阅规则"
+        ],
+        "summary": "修改全局规则",
+        "description": "提交读取时的版本；不追溯已有借阅和已读取旧规则的请求。",
+        "operationId": "update",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdatePolicyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/BorrowingPolicy"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "参数、账号请求头或请求格式不正确",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryProblem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "请求的资源不存在",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryProblem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "内部错误或数据一致性异常",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryProblem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "服务暂不可用或提交结果未确认；请结合 code 判定，不自动重放借阅",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryProblem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "重复在借、名额/额度不足或规则版本冲突",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/loans": {
+      "post": {
+        "tags": [
+          "Loans / 借阅"
+        ],
+        "summary": "借阅图书",
+        "description": "每个账号同书最多一笔未归还记录；失败不会占用数量。",
+        "operationId": "borrow",
+        "parameters": [
+          {
+            "name": "X-Library-Account-Id",
+            "in": "header",
+            "description": "当前预置图书馆账号 ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BorrowRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoanView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "参数、账号请求头或请求格式不正确",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryProblem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "请求的资源不存在",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryProblem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "内部错误或数据一致性异常",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryProblem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "服务暂不可用或提交结果未确认；请结合 code 判定，不自动重放借阅",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryProblem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "重复在借、名额/额度不足或规则版本冲突",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/loans/{loanId}/return": {
+      "post": {
+        "tags": [
+          "Loans / 借阅"
+        ],
+        "summary": "归还指定借阅",
+        "description": "按 loanId 幂等，重复请求保留原归还时间且不会再次释放数量。",
+        "operationId": "returnLoan",
+        "parameters": [
+          {
+            "name": "X-Library-Account-Id",
+            "in": "header",
+            "description": "当前预置图书馆账号 ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "loanId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "exclusiveMinimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoanView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "参数、账号请求头或请求格式不正确",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryProblem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "请求的资源不存在",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryProblem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "内部错误或数据一致性异常",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryProblem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "服务暂不可用或提交结果未确认；请结合 code 判定，不自动重放借阅",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryProblem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "该借阅不属于当前账号",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/loans/current": {
+      "get": {
+        "tags": [
+          "Loans / 借阅"
+        ],
+        "summary": "查看当前账号的未归还借阅",
+        "description": "包含逾期记录，按借阅 ID 降序。",
+        "operationId": "current",
+        "parameters": [
+          {
+            "name": "X-Library-Account-Id",
+            "in": "header",
+            "description": "当前预置图书馆账号 ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": 0
+            }
+          },
+          {
+            "name": "size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": 20
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/SlicePageLoanView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "参数、账号请求头或请求格式不正确",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryProblem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "请求的资源不存在",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryProblem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "内部错误或数据一致性异常",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryProblem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "服务暂不可用或提交结果未确认；请结合 code 判定，不自动重放借阅",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/borrowing-policy": {
+      "get": {
+        "tags": [
+          "Borrowing Policy / 借阅规则"
+        ],
+        "summary": "读取全局借阅规则",
+        "operationId": "current_1",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/BorrowingPolicy"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "参数、账号请求头或请求格式不正确",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryProblem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "请求的资源不存在",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryProblem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "内部错误或数据一致性异常",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryProblem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "服务暂不可用或提交结果未确认；请结合 code 判定，不自动重放借阅",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/books": {
+      "get": {
+        "tags": [
+          "Books / 图书"
+        ],
+        "summary": "分页浏览图书",
+        "description": "按书名或作者包含匹配；page 从零开始，size 为 1–100。",
+        "operationId": "search",
+        "parameters": [
+          {
+            "name": "keyword",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": 0
+            }
+          },
+          {
+            "name": "size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": 20
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/SlicePageBook"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "参数、账号请求头或请求格式不正确",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryProblem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "请求的资源不存在",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryProblem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "内部错误或数据一致性异常",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryProblem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "服务暂不可用或提交结果未确认；请结合 code 判定，不自动重放借阅",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/books/{bookId}": {
+      "get": {
+        "tags": [
+          "Books / 图书"
+        ],
+        "summary": "查询图书详情",
+        "operationId": "detail",
+        "parameters": [
+          {
+            "name": "bookId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "exclusiveMinimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/Book"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "参数、账号请求头或请求格式不正确",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryProblem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "请求的资源不存在",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryProblem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "内部错误或数据一致性异常",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryProblem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "服务暂不可用或提交结果未确认；请结合 code 判定，不自动重放借阅",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/loans": {
+      "get": {
+        "tags": [
+          "Loans / 借阅"
+        ],
+        "summary": "按账号、图书或状态查询借阅",
+        "description": "CURRENT 包含逾期；本次管理入口不包含真实权限系统。",
+        "operationId": "adminSearch",
+        "parameters": [
+          {
+            "name": "accountId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "exclusiveMinimum": 0
+            }
+          },
+          {
+            "name": "bookId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "exclusiveMinimum": 0
+            }
+          },
+          {
+            "name": "scope",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "ALL",
+              "enum": [
+                "ALL",
+                "CURRENT",
+                "OVERDUE",
+                "RETURNED"
+              ]
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": 0
+            }
+          },
+          {
+            "name": "size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": 20
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/SlicePageLoanView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "参数、账号请求头或请求格式不正确",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryProblem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "请求的资源不存在",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryProblem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "内部错误或数据一致性异常",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryProblem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "服务暂不可用或提交结果未确认；请结合 code 判定，不自动重放借阅",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/accounts": {
+      "get": {
+        "tags": [
+          "Accounts / 图书馆账号"
+        ],
+        "summary": "列出预置图书馆账号",
+        "description": "演示身份选择，不代表真实认证。",
+        "operationId": "all",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "*/*": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/LibraryAccount"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "参数、账号请求头或请求格式不正确",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryProblem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "请求的资源不存在",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryProblem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "内部错误或数据一致性异常",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryProblem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "服务暂不可用或提交结果未确认；请结合 code 判定，不自动重放借阅",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "LibraryProblem": {
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "instance": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string",
+            "description": "稳定业务错误码"
+          },
+          "requestId": {
+            "type": "string",
+            "description": "与日志及 X-Request-Id 对应"
+          }
+        }
+      },
+      "UpdatePolicyRequest": {
+        "type": "object",
+        "properties": {
+          "maxActiveLoans": {
+            "type": "integer",
+            "format": "int32",
+            "exclusiveMinimum": 0
+          },
+          "loanDays": {
+            "type": "integer",
+            "format": "int32",
+            "exclusiveMinimum": 0
+          },
+          "expectedVersion": {
+            "type": "integer",
+            "format": "int64",
+            "exclusiveMinimum": 0
+          }
+        },
+        "required": [
+          "expectedVersion",
+          "loanDays",
+          "maxActiveLoans"
+        ]
+      },
+      "BorrowingPolicy": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "maxActiveLoans": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "loanDays": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "BorrowRequest": {
+        "type": "object",
+        "properties": {
+          "bookId": {
+            "type": "integer",
+            "format": "int64",
+            "exclusiveMinimum": 0
+          }
+        },
+        "required": [
+          "bookId"
+        ]
+      },
+      "LoanView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "accountId": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "accountNo": {
+            "type": "string"
+          },
+          "accountName": {
+            "type": "string"
+          },
+          "bookId": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "bookTitle": {
+            "type": "string"
+          },
+          "borrowedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "dueAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "returnedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "overdue": {
+            "type": "boolean"
+          }
+        }
+      },
+      "SlicePageLoanView": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LoanView"
+            }
+          },
+          "page": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "size": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "hasNext": {
+            "type": "boolean"
+          }
+        }
+      },
+      "Book": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "title": {
+            "type": "string"
+          },
+          "author": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "totalLicenses": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "availableLicenses": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      },
+      "SlicePageBook": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Book"
+            }
+          },
+          "page": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "size": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "hasNext": {
+            "type": "boolean"
+          }
+        }
+      },
+      "LibraryAccount": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "accountNo": {
+            "type": "string"
+          },
+          "accountName": {
+            "type": "string"
+          },
+          "activeLoanCount": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      }
+    }
+  }
+}

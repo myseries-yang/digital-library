@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="zh-CN" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>图书管理 · 阅界</title>
+    <link rel="stylesheet" th:href="@{/css/library.css}" href="/css/library.css">
+    <script type="module" th:src="@{/js/admin.js}" src="/js/admin.js"></script>
+</head>
+<body>
+<header class="site-header">
+    <a class="brand" href="/"><span class="brand-mark" aria-hidden="true">阅</span><span>阅界<small>DIGITAL LIBRARY</small></span></a>
+    <nav aria-label="主导航"><a href="/">阅读空间</a><a class="active" href="/admin" aria-current="page">图书管理</a><a href="/swagger-ui.html">API 文档 ↗</a></nav>
+</header>
+<main>
+    <section class="admin-heading"><p class="eyebrow">LIBRARY OPERATIONS</p><h1>图书管理</h1><p class="hero-copy">管理借阅规则，查看每一本书、每一个账号的借阅轨迹。</p></section>
+    <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
+    <section class="policy-panel" aria-labelledby="policy-heading">
+        <div><p class="eyebrow">BORROWING POLICY</p><h2 id="policy-heading">全局借阅规则</h2><p class="section-note">新规则用于后续借阅，已有应还日期保持不变。<br>同一账号对同一本图书，最多同时借阅一本。</p><span id="policy-version" class="pill">正在读取规则</span></div>
+        <form id="policy-form" class="policy-form">
+            <label>每账号最大在借数量<input id="max-loans" type="number" min="1" max="2147483647" required><small>包含逾期未归还的图书</small></label>
+            <label>借阅期限（天）<input id="loan-days" type="number" min="1" max="2147483647" required><small>每一天按 24 小时计算</small></label>
+            <button id="save-policy" type="submit">保存规则</button>
+        </form>
+    </section>
+    <section aria-labelledby="history-heading">
+        <div class="section-header"><div><p class="eyebrow">CIRCULATION RECORDS</p><h2 id="history-heading">借阅记录</h2></div><button id="refresh" class="secondary">刷新数据</button></div>
+        <form id="filter-form" class="filters">
+            <label>图书馆账号<select id="filter-account"><option value="">全部账号</option></select></label>
+            <label>图书<select id="filter-book"><option value="">全部图书</option></select></label>
+            <label>借阅范围<select id="filter-scope"><option value="ALL">全部记录</option><option value="CURRENT">当前借阅（含逾期）</option><option value="OVERDUE">逾期未还</option><option value="RETURNED">已归还</option></select></label>
+            <button type="submit">查询记录</button>
+        </form>
+        <div class="table-wrap"><table><thead><tr><th>借阅编号</th><th>图书馆账号</th><th>图书</th><th>借出时间</th><th>应还时间</th><th>归还时间</th><th>状态</th></tr></thead><tbody id="loan-rows"><tr><td colspan="7" class="empty">正在加载记录…</td></tr></tbody></table></div>
+        <div class="pager"><span id="loans-page">第 1 页</span><div><button id="loans-prev" class="secondary" disabled>上一页</button><button id="loans-next" class="secondary" disabled>下一页</button></div></div>
+    </section>
+</main>
+<footer><span>阅界 · 图书馆管理空间</span><span>借阅时间按北京时间展示</span></footer>
+</body>
+</html>

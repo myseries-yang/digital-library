@@ -1,0 +1,10 @@
+spring:
+  datasource:
+    url: "${LIBRARY_DB_URL:jdbc:mysql://localhost:3306/library?connectionTimeZone=UTC&forceConnectionTimeZoneToSession=true&characterEncoding=UTF-8}"
+    username: ${LIBRARY_DB_USERNAME:library}
+    password: ${LIBRARY_DB_PASSWORD:library}
+  flyway:
+    locations: classpath:db/migration/mysql
+library:
+  lock:
+    mode: redis

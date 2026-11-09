@@ -1,0 +1,46 @@
+@base = http://localhost:8080
+@accountId = 1
+@loanId = 12
+@policyVersion = 1
+
+### 预置账号
+GET {{base}}/api/accounts
+
+### 浏览；分页从零开始
+GET {{base}}/api/books?keyword=Java&page=0&size=6
+
+### 详情
+GET {{base}}/api/books/14
+
+### 借阅；将响应 id 更新为上面的 loanId
+POST {{base}}/api/loans
+Content-Type: application/json
+X-Library-Account-Id: {{accountId}}
+
+{"bookId":14}
+
+### 当前借阅
+GET {{base}}/api/loans/current?page=0&size=20
+X-Library-Account-Id: {{accountId}}
+
+### 归还；重复执行不会再次释放数量
+POST {{base}}/api/loans/{{loanId}}/return
+X-Library-Account-Id: {{accountId}}
+
+### 管理查询
+GET {{base}}/api/admin/loans?scope=OVERDUE&page=0&size=20
+
+### 查询规则；将响应 version 更新为 policyVersion
+GET {{base}}/api/borrowing-policy
+
+### 修改规则；版本过旧返回409
+PUT {{base}}/api/admin/borrowing-policy
+Content-Type: application/json
+
+{"maxActiveLoans":10,"loanDays":15,"expectedVersion":{{policyVersion}}}
+
+### 数据库与锁健康
+GET {{base}}/actuator/health
+
+### 读取就绪，不受Redis故障影响
+GET {{base}}/actuator/health/readiness

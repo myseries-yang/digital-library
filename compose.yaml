@@ -1,0 +1,54 @@
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: library
+      MYSQL_USER: library
+      MYSQL_PASSWORD: ${LIBRARY_DB_PASSWORD:-library}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-library-root}
+    ports:
+      - "${MYSQL_PORT:-3307}:3306"
+    volumes:
+      - library-mysql:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -u root -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: redis:8.4
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "${REDIS_PORT:-6380}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 2s
+      retries: 10
+
+  app: &application
+    build: .
+    image: digital-library:local
+    environment:
+      SPRING_PROFILES_ACTIVE: full
+      LIBRARY_DB_URL: "jdbc:mysql://mysql:3306/library?connectionTimeZone=UTC&forceConnectionTimeZoneToSession=true&characterEncoding=UTF-8"
+      LIBRARY_DB_USERNAME: library
+      LIBRARY_DB_PASSWORD: ${LIBRARY_DB_PASSWORD:-library}
+      LIBRARY_REDIS_ADDRESS: redis://redis:6379
+    ports:
+      - "${APP_PORT:-8080}:8080"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  app2:
+    <<: *application
+    profiles: ["concurrency"]
+    ports:
+      - "${APP2_PORT:-8081}:8080"
+
+volumes:
+  library-mysql:
