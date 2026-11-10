@@ -23,7 +23,7 @@ public class OpenApiConfiguration {
                         + "错误为 application/problem+json，包含稳定 code 与 requestId。"
                         + "Redis 仅用于锁；数据关联由应用事务校验，不建立数据库外键。"))
                 .addServersItem(new Server().url("/").description("当前服务地址"))
-                .components(new Components().addSchemas("LibraryProblem", new Schema<>()
+                .components(new Components().addSchemas("LibraryProblem", new Schema<Object>()
                         .type("object").addProperty("type", new StringSchema())
                         .addProperty("title", new StringSchema()).addProperty("status", new IntegerSchema())
                         .addProperty("detail", new StringSchema()).addProperty("instance", new StringSchema())
@@ -34,13 +34,8 @@ public class OpenApiConfiguration {
     @Bean
     public OperationCustomizer libraryErrorResponses() {
         return (operation, method) -> {
-            for (var status : new String[]{"400", "404", "500", "503"}) {
-                operation.getResponses().addApiResponse(status, problemResponse(switch (status) {
-                    case "400" -> "参数、账号请求头或请求格式不正确";
-                    case "404" -> "请求的资源不存在";
-                    case "503" -> "服务暂不可用或提交结果未确认；请结合 code 判定，不自动重放借阅";
-                    default -> "内部错误或数据一致性异常";
-                }));
+            for (String status : new String[]{"400", "404", "500", "503"}) {
+                operation.getResponses().addApiResponse(status, problemResponse(errorDescription(status)));
             }
             if (method.getMethod().getName().equals("borrow") || method.getMethod().getName().equals("update")) {
                 operation.getResponses().addApiResponse("409", problemResponse("重复在借、名额/额度不足或规则版本冲突"));
@@ -52,9 +47,22 @@ public class OpenApiConfiguration {
         };
     }
 
+    private String errorDescription(String status) {
+        switch (status) {
+            case "400":
+                return "参数、账号请求头或请求格式不正确";
+            case "404":
+                return "请求的资源不存在";
+            case "503":
+                return "服务暂不可用或提交结果未确认；请结合 code 判定，不自动重放借阅";
+            default:
+                return "内部错误或数据一致性异常";
+        }
+    }
+
     private ApiResponse problemResponse(String description) {
         return new ApiResponse().description(description).content(new Content().addMediaType(
                 "application/problem+json", new io.swagger.v3.oas.models.media.MediaType()
-                        .schema(new Schema<>().$ref("#/components/schemas/LibraryProblem"))));
+                        .schema(new Schema<Object>().$ref("#/components/schemas/LibraryProblem"))));
     }
 }

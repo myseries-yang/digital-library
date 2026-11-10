@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.library.support.DatabaseTestMapper">
+    <select id="inconsistentAccountCounts" resultType="int">
+        SELECT COUNT(*) FROM library_account a
+        WHERE a.active_loan_count &lt;&gt; (SELECT COUNT(*) FROM current_loan c WHERE c.account_id = a.id)
+    </select>
+    <select id="inconsistentBookLicenses" resultType="int">
+        SELECT COUNT(*) FROM book b
+        WHERE b.total_licenses - b.available_licenses &lt;&gt; (SELECT COUNT(*) FROM current_loan c WHERE c.book_id = b.id)
+    </select>
+    <select id="inconsistentLoanStates" resultType="int">
+        SELECT COUNT(*) FROM loan l LEFT JOIN current_loan c ON c.loan_id = l.id
+        WHERE (l.returned_at IS NULL AND c.id IS NULL) OR (l.returned_at IS NOT NULL AND c.id IS NOT NULL)
+    </select>
+    <select id="inconsistentRelationships" resultType="int">
+        SELECT COUNT(*) FROM current_loan c
+        LEFT JOIN loan l ON l.id = c.loan_id
+        LEFT JOIN library_account a ON a.id = c.account_id
+        LEFT JOIN book b ON b.id = c.book_id
+        WHERE l.id IS NULL OR a.id IS NULL OR b.id IS NULL OR l.account_id &lt;&gt; c.account_id OR l.book_id &lt;&gt; c.book_id
+    </select>
+
+    <delete id="deleteCurrentLoans">DELETE FROM current_loan</delete>
+    <delete id="deleteLoans">DELETE FROM loan</delete>
+    <update id="resetAccounts">UPDATE library_account SET active_loan_count = 0</update>
+    <update id="resetBooks">UPDATE book SET available_licenses = total_licenses</update>
+    <update id="resetPolicy">UPDATE borrowing_policy SET max_active_loans = 10, loan_days = 15, version = 1 WHERE id = 1</update>
+
+    <select id="countBooks" resultType="int">SELECT COUNT(*) FROM book</select>
+    <select id="countAccounts" resultType="int">SELECT COUNT(*) FROM library_account</select>
+    <select id="countLoans" resultType="int">SELECT COUNT(*) FROM loan</select>
+    <select id="countCurrentLoansForBook" resultType="int">
+        SELECT COUNT(*) FROM current_loan WHERE book_id = #{bookId}
+    </select>
+    <select id="accountLoanCount" resultType="int">SELECT active_loan_count FROM library_account WHERE id = #{id}</select>
+    <select id="bookAvailableLicenses" resultType="int">SELECT available_licenses FROM book WHERE id = #{id}</select>
+    <update id="setLoanDates">
+        UPDATE loan SET borrowed_at = #{borrowedAt}, due_at = #{dueAt} WHERE id = #{id}
+    </update>
+    <select id="borrowedLocalDateTime" resultType="java.time.LocalDateTime">
+        SELECT borrowed_at FROM loan WHERE id = #{id}
+    </select>
+    <update id="updateBookText">
+        UPDATE book SET title = #{title}, author = #{author} WHERE id = #{id}
+    </update>
+
+    <select id="h2ForeignKeyCount" resultType="int">
+        SELECT COUNT(*) FROM information_schema.table_constraints
+        WHERE constraint_type = 'FOREIGN KEY' AND table_schema = 'PUBLIC'
+    </select>
+    <select id="mysqlForeignKeyCount" resultType="int">
+        SELECT COUNT(*) FROM information_schema.table_constraints
+        WHERE constraint_schema = DATABASE() AND constraint_type = 'FOREIGN KEY'
+    </select>
+    <select id="h2LoanReferenceComment" resultType="string">
+        SELECT remarks FROM information_schema.columns
+        WHERE table_schema = 'PUBLIC' AND table_name = 'CURRENT_LOAN' AND column_name = 'LOAN_ID'
+    </select>
+    <select id="mysqlLoanReferenceComment" resultType="string">
+        SELECT column_comment FROM information_schema.columns
+        WHERE table_schema = DATABASE() AND table_name = 'current_loan' AND column_name = 'loan_id'
+    </select>
+    <update id="changePolicyForRestart">UPDATE borrowing_policy SET max_active_loans = 7, version = 2 WHERE id = 1</update>
+    <insert id="insertExtraBook">
+        INSERT INTO book(title, author, total_licenses, available_licenses) VALUES('新书', '编辑组', 1, 1)
+    </insert>
+    <select id="maxBookId" resultType="long">SELECT MAX(id) FROM book</select>
+    <select id="policyLimit" resultType="int">SELECT max_active_loans FROM borrowing_policy WHERE id = 1</select>
+    <select id="lockAccountRow" resultType="long">
+        SELECT id FROM library_account WHERE id = #{id} FOR UPDATE
+    </select>
+</mapper>

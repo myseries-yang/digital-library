@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.library.account.persistence.AccountMapper">
+    <sql id="columns">id, account_no, account_name, active_loan_count</sql>
+
+    <select id="selectAll" resultType="com.example.library.account.model.LibraryAccount">
+        SELECT <include refid="columns"/> FROM library_account ORDER BY id
+    </select>
+
+    <select id="selectById" resultType="com.example.library.account.model.LibraryAccount">
+        SELECT <include refid="columns"/> FROM library_account WHERE id = #{id}
+    </select>
+
+    <update id="reserveOne">
+        UPDATE library_account
+        SET active_loan_count = active_loan_count + 1, updated_at = #{now}
+        WHERE id = #{id} AND active_loan_count &lt; #{maxActiveLoans}
+    </update>
+
+    <update id="releaseOne">
+        UPDATE library_account
+        SET active_loan_count = active_loan_count - 1, updated_at = #{now}
+        WHERE id = #{id} AND active_loan_count &gt; 0
+    </update>
+</mapper>

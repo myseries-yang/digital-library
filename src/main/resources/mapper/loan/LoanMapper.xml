@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.library.loan.persistence.LoanMapper">
+    <select id="selectById" resultType="com.example.library.loan.model.Loan">
+        SELECT id, account_id, book_id, policy_id, policy_version,
+               max_active_loans_snapshot, loan_days_snapshot, borrowed_at, due_at, returned_at
+        FROM loan WHERE id = #{id}
+    </select>
+
+    <select id="countCurrent" resultType="int">
+        SELECT COUNT(*) FROM current_loan WHERE account_id = #{accountId} AND book_id = #{bookId}
+    </select>
+
+    <insert id="insert" parameterType="com.example.library.loan.model.Loan"
+            useGeneratedKeys="true" keyProperty="id" keyColumn="id">
+        INSERT INTO loan (account_id, book_id, policy_id, policy_version,
+                          max_active_loans_snapshot, loan_days_snapshot,
+                          borrowed_at, due_at, created_at, updated_at)
+        VALUES (#{accountId}, #{bookId}, #{policyId}, #{policyVersion},
+                #{maxActiveLoansSnapshot}, #{loanDaysSnapshot},
+                #{borrowedAt}, #{dueAt}, #{borrowedAt}, #{borrowedAt})
+    </insert>
+
+    <!-- 通过真实的未归还借阅建立关系，账号和图书必须匹配。 -->
+    <insert id="insertCurrent">
+        INSERT INTO current_loan (loan_id, account_id, book_id, created_at, updated_at)
+        SELECT id, account_id, book_id, #{now}, #{now}
+        FROM loan
+        WHERE id = #{loanId} AND account_id = #{accountId} AND book_id = #{bookId} AND returned_at IS NULL
+    </insert>
+
+    <update id="markReturned">
+        UPDATE loan SET returned_at = #{now}, updated_at = #{now}
+        WHERE id = #{id} AND account_id = #{accountId} AND returned_at IS NULL
+    </update>
+
+    <delete id="deleteCurrent">
+        DELETE FROM current_loan
+        WHERE loan_id = #{loanId} AND account_id = #{accountId} AND book_id = #{bookId}
+    </delete>
+</mapper>

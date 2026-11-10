@@ -8,7 +8,7 @@
 | --- | --- |
 | 运行框架 | JDK 17、Spring Boot 4.1.2、Spring MVC |
 | 构建 | Maven Wrapper 3.9.14，单模块 |
-| 数据访问 | NamedParameterJdbcTemplate、HikariCP，显式参数化 SQL |
+| 数据访问 | MyBatis Spring Boot Starter 4.0.0、Mapper XML、HikariCP |
 | 数据库 | 默认 H2 文件；完整模式 MySQL 8.4 |
 | 迁移 | Flyway，分别维护 H2、MySQL 脚本 |
 | 并发协调 | 演示模式 ReentrantLock；完整模式 Redisson 4.8.0 RLock |
@@ -16,7 +16,9 @@
 | 合约 | springdoc-openapi 3.2.0、运行时 OpenAPI、API 请求示例 |
 | 验证 | Spring Boot Test、JUnit、AssertJ、Testcontainers |
 
-Redis 仅用于锁，不做数据缓存。基础库由成熟开源组件承担，项目只组织业务顺序。其他依赖优先使用 Spring Boot BOM 管理。
+Redis 仅用于锁，不做数据缓存。基础库由成熟开源组件承担，项目只组织业务顺序。其他依赖优先使用 Spring Boot BOM 管理。MyBatis 使用适配 Spring Boot 4 / Java 17 的 [4.0 系列 Starter](https://mybatis.org/spring-boot-starter/mybatis-spring-boot-autoconfigure/)。
+
+编译与运行保持 JDK 17；业务源码按 Java 8 常见语法组织，使用普通类、getter/setter、明确的局部变量类型和传统分支。新增业务逻辑使用有名称的方法，按执行顺序展开。分页容器、集合及框架约定保留必要泛型。
 
 ## 2. 模型与表
 
@@ -58,7 +60,25 @@ flowchart LR
 
 ## 3. 应用与接口
 
-基础包 com.example.library，按 account、book、loan、policy 分功能，infrastructure 提供锁、事务、配置与错误处理。模型不依赖 Spring/Redis，应用服务组织业务协议，仓储实现条件写入，LoanQueries 组合查询视图。
+基础包 com.example.library，按 account、book、loan、policy 分功能，infrastructure 提供锁、事务、配置与错误处理。模型不依赖 Spring/Redis，应用服务组织业务协议，具体 Repository 负责资源检查、搜索参数和数据访问结果处理，MyBatis Mapper 执行 XML SQL，LoanQueries 组织查询视图。
+
+### 代码阅读顺序与数据访问约定
+
+| 入口 | 阅读内容 |
+| --- | --- |
+| LoanController → LoanService | 请求参数、身份与借还流程 |
+| LoanService.borrowInTransaction / returnInTransaction | 一次借阅或归还的完整业务步骤 |
+| 各业务 persistence 包 | 具体 Repository 与 MyBatis Mapper 接口 |
+| resources/mapper 下各模块 XML | 查询、条件更新、主键回填及动态联表 SQL |
+| CommandTransactions / LockCoordinator | 真实事务边界与账号、图书锁顺序 |
+
+Mapper 接口由 MyBatis 生成代理，声明具体业务方法；多参数使用 `@Param` 命名，XML 使用 `#{...}` 绑定。SQL 不在 Java 中拼接。新增查询时，在现有模块的 Mapper 与对应 XML 中添加同名方法和语句即可。复杂筛选使用 `<where>`、`<if>`、`<choose>`，相同的列或联表片段使用 `<sql>` 与 `<include>` 复用。
+
+LoanMapper.insert 使用 `useGeneratedKeys` 将主键回填到 Loan.id；当前关系仍通过 INSERT SELECT 校验借阅归属。账号额度、图书名额和归还标记继续使用带条件的原子 SQL，并检查影响行数。LoanViewMapper 负责联表，LoanQueries 使用同一次 Clock 取值计算逾期，保证筛选与显示的边界一致。
+
+MyBatis 关闭二级缓存，一级缓存仅保留单条语句范围，事务中重复读取直接查询数据库。UtcInstantTypeHandler 将 Instant 与 UTC LocalDateTime 相互转换，统一处理微秒时间和空归还时间。
+
+### API 行为
 
 接口清单见 README 和 OpenAPI。借还及当前借阅使用 X-Library-Account-Id。缺失/非法参数400，不存在404，归属错误403，业务/版本冲突409，暂时不可用503，一致性异常500。
 
@@ -87,7 +107,7 @@ sequenceDiagram
     participant L as 锁协调器
     participant D as 数据库
     A->>L: 账号锁，再图书锁
-    A->>D: TransactionTemplate 开始
+    A->>D: CommandTransactions.begin 开始
     A->>D: 条件变更数量与借阅关系
     alt 全部成功
         A->>D: 提交
@@ -99,7 +119,7 @@ sequenceDiagram
     A->>L: 释放图书锁，再账号锁
 ~~~
 
-外层用例不得被未提交事务包裹；CommandTransactions 显式检查并拥有真实提交边界。写事务 READ COMMITTED，不自动重试。
+外层用例不得被未提交事务包裹；CommandTransactions 显式检查并拥有真实提交边界。写事务 READ COMMITTED，不自动重试。LoanService 使用 try-with-resources 持有 LockHandle；内部显式 begin，业务步骤失败则 rollback，成功则 commit，最后才关闭 LockHandle。提交阶段错误在业务回滚分支之外处理，避免把提交结果未知误报成已回滚。
 
 借阅：一次完整规则快照 → 检查重复 → 账号条件加一 → 图书条件减一 → 插入 loan → 校验并插入 current_loan → 提交。任何失败整体回滚。
 
@@ -119,4 +139,4 @@ Flyway 只在首次执行种子，包含四账号十五书；H2 重置手工种�
 
 数据库与锁健康分开；readiness 仅依赖应用和数据库，Redis 故障保留查询。初始 Redis 不可用也可启动，首次锁操作失败才拒绝对应写入。
 
-验证包含模型、迁移与重启、每阶段回滚、并发、租约失效、页面及 API 合约。实际环境、结果和未验证项见 verification.md，不将 H2 或其他 MySQL 版本等同于目标 MySQL8.4验证。
+生产和测试都通过 MyBatis 操作数据库。测试专用 DatabaseTestMapper 与 XML 负责数据准备、独立一致性查询、元数据检查和行锁故障注入。验证包含模型、迁移与重启、每阶段回滚、并发、租约失效、页面及 API 合约，并覆盖 XML 组合筛选、分页、字面关键词、UTC 映射和真实事务完成后解锁。实际环境、结果和未验证项见 verification.md，不将 H2 或其他 MySQL 版本等同于目标 MySQL8.4验证。

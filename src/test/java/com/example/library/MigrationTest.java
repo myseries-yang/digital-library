@@ -1,46 +1,42 @@
 package com.example.library;
 
+import com.example.library.support.DatabaseTestMapper;
+import com.example.library.support.MyBatisTestSupport;
+import org.apache.ibatis.datasource.unpooled.UnpooledDataSource;
+import org.apache.ibatis.session.SqlSession;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import java.nio.file.Path;
-import java.util.Map;
-import static org.assertj.core.api.Assertions.*;
+import static org.assertj.core.api.Assertions.assertThat;
 
 class MigrationTest {
     @TempDir Path directory;
 
     @Test
-    void fileDatabaseSeedsOnceKeepsChangesAndContinuesGeneratingIds() {
+    void fileDatabaseSeedsOnceKeepsChangesAndContinuesGeneratingIds() throws Exception {
         String url = "jdbc:h2:file:" + directory.resolve("library") + ";DB_CLOSE_ON_EXIT=FALSE";
-        var dataSource = new DriverManagerDataSource(url, "sa", "");
-        var migration = Flyway.configure().dataSource(dataSource).locations("classpath:db/migration/h2").load();
-        migration.migrate();
-        var jdbc = new JdbcTemplate(dataSource);
-        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM book", Integer.class)).isEqualTo(15);
-        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM library_account", Integer.class)).isEqualTo(4);
-        assertThat(jdbc.queryForObject("SELECT active_loan_count FROM library_account WHERE id=2", Integer.class)).isEqualTo(9);
-        assertThat(jdbc.queryForObject("SELECT available_licenses FROM book WHERE id=9", Integer.class)).isZero();
-        DatabaseAssertions.consistent(jdbc);
-        assertThat(jdbc.queryForObject("""
-                SELECT COUNT(*) FROM information_schema.table_constraints
-                WHERE constraint_type='FOREIGN KEY' AND table_schema='PUBLIC'
-                """, Integer.class)).as("不建立数据库外键约束").isZero();
-        Map<String, Object> column = jdbc.queryForMap("""
-                SELECT remarks FROM information_schema.columns
-                WHERE table_schema='PUBLIC' AND table_name='CURRENT_LOAN' AND column_name='LOAN_ID'
-                """);
-        assertThat(column.get("REMARKS").toString()).contains("逻辑关联");
-        jdbc.update("UPDATE borrowing_policy SET max_active_loans=7, version=2 WHERE id=1");
-        jdbc.update("INSERT INTO book(title,author,total_licenses,available_licenses) VALUES('新书','编辑组',1,1)");
-        assertThat(jdbc.queryForObject("SELECT MAX(id) FROM book", Long.class)).isGreaterThan(15);
-        var reopened = new DriverManagerDataSource(url, "sa", "");
+        UnpooledDataSource dataSource = new UnpooledDataSource("org.h2.Driver", url, "sa", "");
+        Flyway.configure().dataSource(dataSource).locations("classpath:db/migration/h2").load().migrate();
+        try (SqlSession session = MyBatisTestSupport.sessionFactory(dataSource).openSession(true)) {
+            DatabaseTestMapper database = session.getMapper(DatabaseTestMapper.class);
+            assertThat(database.countBooks()).isEqualTo(15);
+            assertThat(database.countAccounts()).isEqualTo(4);
+            assertThat(database.accountLoanCount(2)).isEqualTo(9);
+            assertThat(database.bookAvailableLicenses(9)).isZero();
+            DatabaseAssertions.consistent(database);
+            assertThat(database.h2ForeignKeyCount()).as("不建立数据库外键约束").isZero();
+            assertThat(database.h2LoanReferenceComment()).contains("逻辑关联");
+            database.changePolicyForRestart();
+            database.insertExtraBook();
+            assertThat(database.maxBookId()).isGreaterThan(15);
+        }
+        UnpooledDataSource reopened = new UnpooledDataSource("org.h2.Driver", url, "sa", "");
         Flyway.configure().dataSource(reopened).locations("classpath:db/migration/h2").load().migrate();
-        assertThat(new JdbcTemplate(reopened).queryForObject(
-                "SELECT max_active_loans FROM borrowing_policy WHERE id=1", Integer.class)).isEqualTo(7);
-        assertThat(new JdbcTemplate(reopened).queryForObject("SELECT COUNT(*) FROM book", Integer.class)).isEqualTo(16);
-        new JdbcTemplate(reopened).execute("SHUTDOWN");
+        try (SqlSession session = MyBatisTestSupport.sessionFactory(reopened).openSession(true)) {
+            DatabaseTestMapper database = session.getMapper(DatabaseTestMapper.class);
+            assertThat(database.policyLimit()).isEqualTo(7);
+            assertThat(database.countBooks()).isEqualTo(16);
+        }
     }
 }

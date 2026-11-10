@@ -12,7 +12,6 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
-import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
@@ -25,10 +24,10 @@ public class LoanController {
     private final AccountRepository accounts;
 
     public LoanController(LoanService service, LoanQueries queries, AccountRepository accounts) {
-        this.service = service; this.queries = queries; this.accounts = accounts;
+        this.service = service;
+        this.queries = queries;
+        this.accounts = accounts;
     }
-
-    public record BorrowRequest(@NotNull @Positive Long bookId) {}
 
     @PostMapping("/api/loans")
     @ResponseStatus(HttpStatus.CREATED)
@@ -37,7 +36,7 @@ public class LoanController {
             @Parameter(description = "当前预置图书馆账号 ID", required = true)
             @RequestHeader(name = CurrentAccount.HEADER, required = false) String account,
             @RequestBody @Valid BorrowRequest request) {
-        return service.borrow(CurrentAccount.require(account), request.bookId());
+        return service.borrow(CurrentAccount.require(account), request.getBookId());
     }
 
     @PostMapping("/api/loans/{loanId}/return")

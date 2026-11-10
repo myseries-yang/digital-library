@@ -10,9 +10,10 @@ import org.springframework.context.annotation.Configuration;
 @Configuration
 public class LockHealthConfiguration {
     @Bean
-    public HealthIndicator lockServiceHealthIndicator(LibraryProperties properties, ObjectProvider<RedissonClient> clients) {
+    public HealthIndicator lockServiceHealthIndicator(LibraryProperties properties,
+                                                      ObjectProvider<RedissonClient> clients) {
         return () -> {
-            if (!"redis".equals(properties.lock().mode())) {
+            if (!"redis".equals(properties.getLock().getMode())) {
                 return Health.up().withDetail("mode", "local").withDetail("scope", "single JVM").build();
             }
             try {

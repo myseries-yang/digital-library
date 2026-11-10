@@ -22,19 +22,19 @@ class BusinessModelsTest {
     @DisplayName("借阅保存完整规则快照，期限为15×24小时")
     void borrowingCapturesTerms() {
         Loan loan = Loan.borrow(1, 2, policy, clock.instant());
-        assertThat(loan.dueAt()).isEqualTo(clock.instant().plus(15, ChronoUnit.DAYS));
-        assertThat(loan.policyVersion()).isEqualTo(7);
-        assertThat(loan.maxActiveLoansSnapshot()).isEqualTo(10);
-        assertThat(loan.loanDaysSnapshot()).isEqualTo(15);
+        assertThat(loan.getDueAt()).isEqualTo(clock.instant().plus(15, ChronoUnit.DAYS));
+        assertThat(loan.getPolicyVersion()).isEqualTo(7);
+        assertThat(loan.getMaxActiveLoansSnapshot()).isEqualTo(10);
+        assertThat(loan.getLoanDaysSnapshot()).isEqualTo(15);
     }
 
     @Test
     @DisplayName("应还时刻成为逾期，但没有发生归还")
     void overdueIsDerivedWithoutReturning() {
         Loan loan = Loan.borrow(1, 2, policy, clock.instant());
-        assertThat(loan.isOverdue(loan.dueAt().minusNanos(1))).isFalse();
-        assertThat(loan.isOverdue(loan.dueAt())).isTrue();
-        assertThat(loan.returnedAt()).isNull();
+        assertThat(loan.isOverdue(loan.getDueAt().minusNanos(1))).isFalse();
+        assertThat(loan.isOverdue(loan.getDueAt())).isTrue();
+        assertThat(loan.getReturnedAt()).isNull();
     }
 
     @Test
@@ -42,18 +42,18 @@ class BusinessModelsTest {
     void returningIsIdempotent() {
         Loan returned = Loan.borrow(1, 2, policy, clock.instant()).returnAt(clock.instant().plusSeconds(20));
         assertThat(returned.returnAt(clock.instant().plusSeconds(60))).isSameAs(returned);
-        assertThat(returned.isOverdue(returned.dueAt().plusSeconds(1))).isFalse();
+        assertThat(returned.isOverdue(returned.getDueAt().plusSeconds(1))).isFalse();
     }
 
     @Test
     @DisplayName("降低上限允许保留已有数量，但阻止新借阅")
     void lowerLimitOnlyBlocksNewBorrowing() {
-        var account = new LibraryAccount(1, "LIB001", "演示", 8);
-        var reduced = new BorrowingPolicy(1, 5, 7, 8);
+        LibraryAccount account = new LibraryAccount(1, "LIB001", "演示", 8);
+        BorrowingPolicy reduced = new BorrowingPolicy(1, 5, 7, 8);
         assertThatThrownBy(() -> account.requireBorrowingCapacity(reduced))
                 .isInstanceOf(BusinessException.class)
-                .extracting(ex -> ((BusinessException) ex).code()).isEqualTo(ErrorCode.ACCOUNT_LIMIT_REACHED);
-        assertThat(account.activeLoanCount()).isEqualTo(8);
+                .extracting(ex -> ((BusinessException) ex).getCode()).isEqualTo(ErrorCode.ACCOUNT_LIMIT_REACHED);
+        assertThat(account.getActiveLoanCount()).isEqualTo(8);
     }
 
     @Test

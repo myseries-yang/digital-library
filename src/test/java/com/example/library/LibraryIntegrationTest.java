@@ -2,12 +2,20 @@ package com.example.library;
 
 import com.example.library.account.persistence.AccountRepository;
 import com.example.library.book.persistence.BookRepository;
+import com.example.library.book.model.Book;
 import com.example.library.infrastructure.error.BusinessException;
 import com.example.library.infrastructure.error.ErrorCode;
-import com.example.library.infrastructure.locking.LocalLockCoordinator;
-import com.example.library.infrastructure.persistence.JdbcTime;
+import com.example.library.infrastructure.locking.LockCoordinator;
+import com.example.library.infrastructure.locking.LockCoordinator.LockHandle;
+import com.example.library.support.DatabaseTestMapper;
 import com.example.library.loan.application.LoanService;
 import com.example.library.loan.application.LoanView;
+import com.example.library.loan.application.LoanQueries;
+import com.example.library.loan.model.LoanScope;
+import com.example.library.loan.persistence.LoanViewMapper;
+import com.example.library.infrastructure.transaction.CommandTransactions;
+import com.example.library.infrastructure.web.PageQuery;
+import com.example.library.infrastructure.web.SlicePage;
 import com.example.library.loan.model.Loan;
 import com.example.library.loan.persistence.LoanRepository;
 import com.example.library.policy.application.PolicyService;
@@ -18,18 +26,28 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.dao.DataIntegrityViolationException;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.mockito.InOrder;
 import tools.jackson.databind.ObjectMapper;
 import java.net.URI;
+import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Instant;
+import java.time.Clock;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.TimeZone;
 import java.util.concurrent.*;
 import java.util.function.Supplier;
 import static org.assertj.core.api.Assertions.*;
@@ -39,75 +57,77 @@ import static org.mockito.Mockito.*;
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
 class LibraryIntegrationTest {
-    @Autowired JdbcTemplate jdbc;
+    @Autowired DatabaseTestMapper database;
     @Autowired LoanService service;
     @Autowired PolicyService policyService;
     @Autowired AccountRepository accounts;
+    @Autowired LoanViewMapper loanViewMapper;
     @Autowired ObjectMapper mapper;
     @Value("${local.server.port}") int port;
     @MockitoSpyBean BookRepository books;
     @MockitoSpyBean LoanRepository loans;
     @MockitoSpyBean PolicyRepository policies;
-    @MockitoSpyBean LocalLockCoordinator locks;
+    @MockitoSpyBean LockCoordinator locks;
+    @MockitoSpyBean CommandTransactions transactions;
     private ApiClient api;
 
     @BeforeEach
     void reset() {
-        DatabaseAssertions.reset(jdbc);
+        DatabaseAssertions.reset(database);
         api = new ApiClient(port, mapper);
     }
 
     @AfterEach
-    void invariants() { DatabaseAssertions.consistent(jdbc); }
+    void invariants() { DatabaseAssertions.consistent(database); }
 
     @Test
     @DisplayName("浏览、搜索、分页、参数错误及请求编号")
     void browseAndValidateApiContract() throws Exception {
-        var page = api.request("GET", "/api/books?size=6", null, null);
-        assertThat(page.status()).isEqualTo(200);
-        assertThat(page.body().path("items").size()).isEqualTo(6);
-        assertThat(page.body().path("hasNext").asBoolean()).isTrue();
-        assertThat(page.body().path("items").get(0).path("id").asLong()).isEqualTo(1);
-        assertThat(api.request("GET", "/api/books?keyword=%25", null, null).body().path("items").size()).isZero();
-        assertThat(api.request("GET", "/api/books/14", null, null).body().path("totalLicenses").asInt()).isEqualTo(1);
-        var invalid = api.request("GET", "/api/books?size=101", null, null);
-        assertThat(invalid.status()).isEqualTo(400);
-        assertThat(invalid.body().path("code").asString()).isEqualTo("INVALID_ARGUMENT");
-        assertThat(invalid.body().path("requestId").asString()).isEqualTo(invalid.requestId()).isNotBlank();
+        ApiClient.Result page = api.request("GET", "/api/books?size=6", null, null);
+        assertThat(page.getStatus()).isEqualTo(200);
+        assertThat(page.getBody().path("items").size()).isEqualTo(6);
+        assertThat(page.getBody().path("hasNext").asBoolean()).isTrue();
+        assertThat(page.getBody().path("items").get(0).path("id").asLong()).isEqualTo(1);
+        assertThat(api.request("GET", "/api/books?keyword=%25", null, null).getBody().path("items").size()).isZero();
+        assertThat(api.request("GET", "/api/books/14", null, null).getBody().path("totalLicenses").asInt()).isEqualTo(1);
+        ApiClient.Result invalid = api.request("GET", "/api/books?size=101", null, null);
+        assertThat(invalid.getStatus()).isEqualTo(400);
+        assertThat(invalid.getBody().path("code").asString()).isEqualTo("INVALID_ARGUMENT");
+        assertThat(invalid.getBody().path("requestId").asString()).isEqualTo(invalid.getRequestId()).isNotBlank();
     }
 
     @Test
     @DisplayName("借阅、重复在借、幂等归还以及旧请求不误还新借阅")
     void borrowReturnAndReplayOldReturn() throws Exception {
-        var borrowed = api.request("POST", "/api/loans", 1L, Map.of("bookId", 14));
-        assertThat(borrowed.status()).isEqualTo(201);
-        long id = borrowed.body().path("id").asLong();
-        assertThat(accounts.require(1).activeLoanCount()).isEqualTo(1);
-        assertThat(books.require(14).availableLicenses()).isZero();
-        assertThat(api.request("POST", "/api/loans", 1L, Map.of("bookId", 14)).status()).isEqualTo(409);
-        var returned = api.request("POST", "/api/loans/" + id + "/return", 1L, null);
-        var repeated = api.request("POST", "/api/loans/" + id + "/return", 1L, null);
-        assertThat(returned.status()).isEqualTo(200);
-        assertThat(repeated.body()).isEqualTo(returned.body());
-        assertThat(accounts.require(1).activeLoanCount()).isZero();
-        assertThat(books.require(14).availableLicenses()).isEqualTo(1);
-        long newId = api.request("POST", "/api/loans", 1L, Map.of("bookId", 14)).body().path("id").asLong();
+        ApiClient.Result borrowed = api.request("POST", "/api/loans", 1L, Collections.singletonMap("bookId", 14));
+        assertThat(borrowed.getStatus()).isEqualTo(201);
+        long id = borrowed.getBody().path("id").asLong();
+        assertThat(accounts.require(1).getActiveLoanCount()).isEqualTo(1);
+        assertThat(books.require(14).getAvailableLicenses()).isZero();
+        assertThat(api.request("POST", "/api/loans", 1L, Collections.singletonMap("bookId", 14)).getStatus()).isEqualTo(409);
+        ApiClient.Result returned = api.request("POST", "/api/loans/" + id + "/return", 1L, null);
+        ApiClient.Result repeated = api.request("POST", "/api/loans/" + id + "/return", 1L, null);
+        assertThat(returned.getStatus()).isEqualTo(200);
+        assertThat(repeated.getBody()).isEqualTo(returned.getBody());
+        assertThat(accounts.require(1).getActiveLoanCount()).isZero();
+        assertThat(books.require(14).getAvailableLicenses()).isEqualTo(1);
+        long newId = api.request("POST", "/api/loans", 1L, Collections.singletonMap("bookId", 14)).getBody().path("id").asLong();
         assertThat(newId).isNotEqualTo(id);
-        assertThat(api.request("POST", "/api/loans/" + id + "/return", 1L, null).status()).isEqualTo(200);
-        assertThat(loans.require(newId).returnedAt()).isNull();
-        assertThat(accounts.require(1).activeLoanCount()).isEqualTo(1);
+        assertThat(api.request("POST", "/api/loans/" + id + "/return", 1L, null).getStatus()).isEqualTo(200);
+        assertThat(loans.require(newId).getReturnedAt()).isNull();
+        assertThat(accounts.require(1).getActiveLoanCount()).isEqualTo(1);
     }
 
     @Test
     @DisplayName("账号头、资源存在及借阅归属校验")
     void validatesIdentityAndOwnership() throws Exception {
-        assertThat(api.request("POST", "/api/loans", null, Map.of("bookId", 14)).status()).isEqualTo(400);
-        assertThat(api.request("POST", "/api/loans", 999L, Map.of("bookId", 14)).status()).isEqualTo(404);
-        assertThat(api.request("POST", "/api/loans", 1L, Map.of("bookId", 999)).status()).isEqualTo(404);
-        assertThat(api.request("POST", "/api/loans", 1L, Map.of("bookId", -1)).status()).isEqualTo(400);
+        assertThat(api.request("POST", "/api/loans", null, Collections.singletonMap("bookId", 14)).getStatus()).isEqualTo(400);
+        assertThat(api.request("POST", "/api/loans", 999L, Collections.singletonMap("bookId", 14)).getStatus()).isEqualTo(404);
+        assertThat(api.request("POST", "/api/loans", 1L, Collections.singletonMap("bookId", 999)).getStatus()).isEqualTo(404);
+        assertThat(api.request("POST", "/api/loans", 1L, Collections.singletonMap("bookId", -1)).getStatus()).isEqualTo(400);
         LoanView loan = service.borrow(1, 14);
-        assertThat(api.request("POST", "/api/loans/" + loan.id() + "/return", 2L, null).status()).isEqualTo(403);
-        assertThat(loans.require(loan.id()).returnedAt()).isNull();
+        assertThat(api.request("POST", "/api/loans/" + loan.getId() + "/return", 2L, null).getStatus()).isEqualTo(403);
+        assertThat(loans.require(loan.getId()).getReturnedAt()).isNull();
     }
 
     @Test
@@ -115,34 +135,33 @@ class LibraryIntegrationTest {
     void overdueRemainsCurrentAndDoesNotBanBorrowing() throws Exception {
         LoanView loan = service.borrow(1, 12);
         Instant now = Instant.now();
-        jdbc.update("UPDATE loan SET borrowed_at=?, due_at=? WHERE id=?",
-                JdbcTime.write(now.minus(16, ChronoUnit.DAYS)), JdbcTime.write(now.minus(1, ChronoUnit.DAYS)), loan.id());
-        var current = api.request("GET", "/api/loans/current", 1L, null);
-        assertThat(current.body().path("items").get(0).path("overdue").asBoolean()).isTrue();
+        database.setLoanDates(loan.getId(), now.minus(16, ChronoUnit.DAYS), now.minus(1, ChronoUnit.DAYS));
+        ApiClient.Result current = api.request("GET", "/api/loans/current", 1L, null);
+        assertThat(current.getBody().path("items").get(0).path("overdue").asBoolean()).isTrue();
         service.borrow(1, 14);
-        assertThat(accounts.require(1).activeLoanCount()).isEqualTo(2);
-        var overdue = api.request("GET", "/api/admin/loans?accountId=1&scope=OVERDUE", null, null);
-        assertThat(overdue.body().path("items").size()).isEqualTo(1);
+        assertThat(accounts.require(1).getActiveLoanCount()).isEqualTo(2);
+        ApiClient.Result overdue = api.request("GET", "/api/admin/loans?accountId=1&scope=OVERDUE", null, null);
+        assertThat(overdue.getBody().path("items").size()).isEqualTo(1);
     }
 
     @Test
     @DisplayName("规则版本冲突、已有期限保留、新借阅使用新期限")
     void policyChangesAreProspective() throws Exception {
         LoanView original = service.borrow(1, 10);
-        var updated = api.request("PUT", "/api/admin/borrowing-policy", null,
-                Map.of("maxActiveLoans", 1, "loanDays", 7, "expectedVersion", 1));
-        assertThat(updated.status()).isEqualTo(200);
-        assertThat(updated.body().path("version").asLong()).isEqualTo(2);
-        assertThat(loans.require(original.id()).dueAt()).isEqualTo(original.dueAt());
+        ApiClient.Result updated = api.request("PUT", "/api/admin/borrowing-policy", null,
+                policyRequest(1, 7, 1));
+        assertThat(updated.getStatus()).isEqualTo(200);
+        assertThat(updated.getBody().path("version").asLong()).isEqualTo(2);
+        assertThat(loans.require(original.getId()).getDueAt()).isEqualTo(original.getDueAt());
         assertBusiness(ErrorCode.ACCOUNT_LIMIT_REACHED, () -> service.borrow(1, 11));
-        service.returnLoan(1, original.id());
+        service.returnLoan(1, original.getId());
         LoanView next = service.borrow(1, 11);
-        assertThat(next.dueAt()).isEqualTo(next.borrowedAt().plus(7, ChronoUnit.DAYS));
-        assertThat(loans.require(next.id()).loanDaysSnapshot()).isEqualTo(7);
+        assertThat(next.getDueAt()).isEqualTo(next.getBorrowedAt().plus(7, ChronoUnit.DAYS));
+        assertThat(loans.require(next.getId()).getLoanDaysSnapshot()).isEqualTo(7);
         assertThat(api.request("PUT", "/api/admin/borrowing-policy", null,
-                Map.of("maxActiveLoans", 2, "loanDays", 8, "expectedVersion", 1)).status()).isEqualTo(409);
+                policyRequest(2, 8, 1)).getStatus()).isEqualTo(409);
         assertThat(api.request("PUT", "/api/admin/borrowing-policy", null,
-                Map.of("maxActiveLoans", 0, "loanDays", 8, "expectedVersion", 2)).status()).isEqualTo(400);
+                policyRequest(0, 8, 2)).getStatus()).isEqualTo(400);
     }
 
     @Test
@@ -150,8 +169,8 @@ class LibraryIntegrationTest {
     void quotaRollsBackWhenStockReservationFails() {
         doReturn(0).when(books).reserveOne(eq(14L), any());
         assertBusiness(ErrorCode.BOOK_UNAVAILABLE, () -> service.borrow(1, 14));
-        assertThat(accounts.require(1).activeLoanCount()).isZero();
-        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM loan", Integer.class)).isZero();
+        assertThat(accounts.require(1).getActiveLoanCount()).isZero();
+        assertThat(database.countLoans()).isZero();
     }
 
     @Test
@@ -159,8 +178,8 @@ class LibraryIntegrationTest {
     void bothCountersRollBackWhenLoanInsertFails() {
         doThrow(new DataIntegrityViolationException("injected insert failure")).when(loans).insert(any(Loan.class));
         assertThatThrownBy(() -> service.borrow(1, 14)).isInstanceOf(DataIntegrityViolationException.class);
-        assertThat(accounts.require(1).activeLoanCount()).isZero();
-        assertThat(books.require(14).availableLicenses()).isEqualTo(1);
+        assertThat(accounts.require(1).getActiveLoanCount()).isZero();
+        assertThat(books.require(14).getAvailableLicenses()).isEqualTo(1);
     }
 
     @Test
@@ -171,8 +190,8 @@ class LibraryIntegrationTest {
             return null;
         }).when(loans).insertCurrent(anyLong(), eq(1L), anyLong(), any());
         assertBusiness(ErrorCode.DATA_INCONSISTENCY, () -> service.borrow(1, 14));
-        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM loan", Integer.class)).isZero();
-        assertThat(accounts.require(1).activeLoanCount()).isZero();
+        assertThat(database.countLoans()).isZero();
+        assertThat(accounts.require(1).getActiveLoanCount()).isZero();
     }
 
     @Test
@@ -180,39 +199,39 @@ class LibraryIntegrationTest {
     void failedReturnRestoresOriginalState() {
         LoanView borrowed = service.borrow(1, 14);
         doReturn(0).when(books).releaseOne(eq(14L), any());
-        assertBusiness(ErrorCode.DATA_INCONSISTENCY, () -> service.returnLoan(1, borrowed.id()));
-        assertThat(loans.require(borrowed.id()).returnedAt()).isNull();
-        assertThat(accounts.require(1).activeLoanCount()).isEqualTo(1);
-        assertThat(books.require(14).availableLicenses()).isZero();
+        assertBusiness(ErrorCode.DATA_INCONSISTENCY, () -> service.returnLoan(1, borrowed.getId()));
+        assertThat(loans.require(borrowed.getId()).getReturnedAt()).isNull();
+        assertThat(accounts.require(1).getActiveLoanCount()).isEqualTo(1);
+        assertThat(books.require(14).getAvailableLicenses()).isZero();
     }
 
     @Test
     @DisplayName("删除当前关系失败，归还状态及两个数量一起回滚")
     void failedRelationshipDeleteRollsBackWholeReturn() {
         LoanView borrowed = service.borrow(1, 14);
-        doReturn(0).when(loans).deleteCurrent(borrowed.id(), 1, 14);
-        assertBusiness(ErrorCode.DATA_INCONSISTENCY, () -> service.returnLoan(1, borrowed.id()));
-        assertThat(loans.require(borrowed.id()).returnedAt()).isNull();
-        assertThat(accounts.require(1).activeLoanCount()).isEqualTo(1);
+        doReturn(0).when(loans).deleteCurrent(borrowed.getId(), 1, 14);
+        assertBusiness(ErrorCode.DATA_INCONSISTENCY, () -> service.returnLoan(1, borrowed.getId()));
+        assertThat(loans.require(borrowed.getId()).getReturnedAt()).isNull();
+        assertThat(accounts.require(1).getActiveLoanCount()).isEqualTo(1);
     }
 
     @Test
     @DisplayName("获取锁失败没有业务写入")
     void lockFailureDoesNotEnterWriteProtocol() {
         doThrow(new BusinessException(ErrorCode.LOCK_ACQUIRE_TIMEOUT))
-                .when(locks).withLocks(eq(1L), eq(14L), any());
+                .when(locks).acquire(1L, 14L);
         assertBusiness(ErrorCode.LOCK_ACQUIRE_TIMEOUT, () -> service.borrow(1, 14));
-        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM loan", Integer.class)).isZero();
+        assertThat(database.countLoans()).isZero();
     }
 
     @Test
     @DisplayName("锁失效时：最后一个名额仍最多借出一次")
     void databaseProtectsLastLicenseWithoutCoordination() throws Exception {
         bypassLocks();
-        var outcomes = race(() -> service.borrow(1, 14), () -> service.borrow(2, 14));
-        assertThat(outcomes.stream().filter(value -> value.loan() != null).count()).isEqualTo(1);
-        assertThat(books.require(14).availableLicenses()).isZero();
-        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM current_loan WHERE book_id=14", Integer.class)).isEqualTo(1);
+        List<Outcome> outcomes = race(() -> service.borrow(1, 14), () -> service.borrow(2, 14));
+        assertThat(outcomes.stream().filter(value -> value.getLoan() != null).count()).isEqualTo(1);
+        assertThat(books.require(14).getAvailableLicenses()).isZero();
+        assertThat(database.countCurrentLoansForBook(14)).isEqualTo(1);
     }
 
     @Test
@@ -220,19 +239,19 @@ class LibraryIntegrationTest {
     void databaseProtectsAccountLimitWithoutCoordination() throws Exception {
         for (long book = 1; book <= 9; book++) service.borrow(1, book);
         bypassLocks();
-        var outcomes = race(() -> service.borrow(1, 10), () -> service.borrow(1, 11));
-        assertThat(outcomes.stream().filter(value -> value.loan() != null).count()).isEqualTo(1);
-        assertThat(accounts.require(1).activeLoanCount()).isEqualTo(10);
+        List<Outcome> outcomes = race(() -> service.borrow(1, 10), () -> service.borrow(1, 11));
+        assertThat(outcomes.stream().filter(value -> value.getLoan() != null).count()).isEqualTo(1);
+        assertThat(accounts.require(1).getActiveLoanCount()).isEqualTo(10);
     }
 
     @Test
     @DisplayName("锁失效时：当前关系唯一约束阻止同书重复在借")
     void databaseProtectsCurrentRelationshipWithoutCoordination() throws Exception {
         bypassLocks();
-        var outcomes = race(() -> service.borrow(1, 10), () -> service.borrow(1, 10));
-        assertThat(outcomes.stream().filter(value -> value.loan() != null).count()).isEqualTo(1);
-        assertThat(accounts.require(1).activeLoanCount()).isEqualTo(1);
-        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM loan", Integer.class)).isEqualTo(1);
+        List<Outcome> outcomes = race(() -> service.borrow(1, 10), () -> service.borrow(1, 10));
+        assertThat(outcomes.stream().filter(value -> value.getLoan() != null).count()).isEqualTo(1);
+        assertThat(accounts.require(1).getActiveLoanCount()).isEqualTo(1);
+        assertThat(database.countLoans()).isEqualTo(1);
     }
 
     @Test
@@ -240,11 +259,11 @@ class LibraryIntegrationTest {
     void concurrentReturnsAreIdempotentWithoutCoordination() throws Exception {
         LoanView borrowed = service.borrow(1, 14);
         bypassLocks();
-        var outcomes = race(() -> service.returnLoan(1, borrowed.id()), () -> service.returnLoan(1, borrowed.id()));
-        assertThat(outcomes).allMatch(value -> value.loan() != null);
-        assertThat(outcomes.get(0).loan().returnedAt()).isEqualTo(outcomes.get(1).loan().returnedAt());
-        assertThat(accounts.require(1).activeLoanCount()).isZero();
-        assertThat(books.require(14).availableLicenses()).isEqualTo(1);
+        List<Outcome> outcomes = race(() -> service.returnLoan(1, borrowed.getId()), () -> service.returnLoan(1, borrowed.getId()));
+        assertThat(outcomes).allMatch(value -> value.getLoan() != null);
+        assertThat(outcomes.get(0).getLoan().getReturnedAt()).isEqualTo(outcomes.get(1).getLoan().getReturnedAt());
+        assertThat(accounts.require(1).getActiveLoanCount()).isZero();
+        assertThat(books.require(14).getAvailableLicenses()).isEqualTo(1);
     }
 
     @Test
@@ -268,9 +287,9 @@ class LibraryIntegrationTest {
             policyService.update(5, 7, 1);
             proceed.countDown();
             LoanView result = pending.get(10, TimeUnit.SECONDS);
-            assertThat(loans.require(result.id()).policyVersion()).isEqualTo(1);
-            assertThat(result.dueAt()).isEqualTo(result.borrowedAt().plus(15, ChronoUnit.DAYS));
-            assertThat(accounts.require(1).activeLoanCount()).isEqualTo(10);
+            assertThat(loans.require(result.getId()).getPolicyVersion()).isEqualTo(1);
+            assertThat(result.getDueAt()).isEqualTo(result.getBorrowedAt().plus(15, ChronoUnit.DAYS));
+            assertThat(accounts.require(1).getActiveLoanCount()).isEqualTo(10);
             assertBusiness(ErrorCode.ACCOUNT_LIMIT_REACHED, () -> service.borrow(1, 11));
         } finally {
             proceed.countDown();
@@ -283,16 +302,16 @@ class LibraryIntegrationTest {
     void queryViewsPagesAndOpenApiAreAvailable() throws Exception {
         LoanView first = service.borrow(1, 10);
         service.borrow(2, 11);
-        service.returnLoan(1, first.id());
-        var returned = api.request("GET", "/api/admin/loans?accountId=1&scope=RETURNED", null, null);
-        assertThat(returned.body().path("items").size()).isEqualTo(1);
-        assertThat(returned.body().path("items").get(0).path("id").asLong()).isEqualTo(first.id());
-        assertThat(api.request("GET", "/api/admin/loans?scope=INVALID", null, null).status()).isEqualTo(400);
-        var openapi = api.request("GET", "/v3/api-docs", null, null);
-        assertThat(openapi.status()).isEqualTo(200);
-        assertThat(openapi.body().path("paths").has("/api/loans/{loanId}/return")).isTrue();
-        for (String path : List.of("/", "/admin")) {
-            var response = HttpClient.newHttpClient().send(
+        service.returnLoan(1, first.getId());
+        ApiClient.Result returned = api.request("GET", "/api/admin/loans?accountId=1&scope=RETURNED", null, null);
+        assertThat(returned.getBody().path("items").size()).isEqualTo(1);
+        assertThat(returned.getBody().path("items").get(0).path("id").asLong()).isEqualTo(first.getId());
+        assertThat(api.request("GET", "/api/admin/loans?scope=INVALID", null, null).getStatus()).isEqualTo(400);
+        ApiClient.Result openapi = api.request("GET", "/v3/api-docs", null, null);
+        assertThat(openapi.getStatus()).isEqualTo(200);
+        assertThat(openapi.getBody().path("paths").has("/api/loans/{loanId}/return")).isTrue();
+        for (String path : Arrays.asList("/", "/admin")) {
+            HttpResponse<String> response = HttpClient.newHttpClient().send(
                     HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + path)).GET().build(),
                     HttpResponse.BodyHandlers.ofString());
             assertThat(response.statusCode()).isEqualTo(200);
@@ -300,32 +319,158 @@ class LibraryIntegrationTest {
         }
     }
 
-    private void bypassLocks() {
-        doAnswer(invocation -> ((Supplier<?>) invocation.getArgument(2)).get())
-                .when(locks).withLocks(anyLong(), anyLong(), any());
+    @Test
+    @DisplayName("XML 联表查询组合筛选、逾期边界与借阅分页保持一致")
+    void xmlFiltersAndPaginationUseTheSameOverdueBoundary() {
+        LoanView overdue = service.borrow(1, 10);
+        Instant boundary = Instant.now().truncatedTo(ChronoUnit.MICROS);
+        database.setLoanDates(overdue.getId(), boundary.minus(15, ChronoUnit.DAYS), boundary);
+        LoanView current = service.borrow(1, 11);
+        LoanView returned = service.borrow(2, 10);
+        service.returnLoan(2, returned.getId());
+        LoanQueries queries = new LoanQueries(loanViewMapper, Clock.fixed(boundary, ZoneOffset.UTC));
+        PageQuery page = new PageQuery(0, 20);
+
+        SlicePage<LoanView> filtered = queries.search(1L, 10L, LoanScope.OVERDUE, page);
+        assertThat(filtered.getItems()).extracting(LoanView::getId).containsExactly(overdue.getId());
+        assertThat(filtered.getItems().get(0).isOverdue()).isTrue();
+        assertThat(queries.search(null, 10L, LoanScope.CURRENT, page).getItems())
+                .extracting(LoanView::getId).containsExactly(overdue.getId());
+        assertThat(queries.search(null, null, LoanScope.RETURNED, page).getItems())
+                .extracting(LoanView::getId).containsExactly(returned.getId());
+
+        SlicePage<LoanView> first = queries.search(null, null, LoanScope.ALL, new PageQuery(0, 1));
+        assertThat(first.getItems()).extracting(LoanView::getId).containsExactly(returned.getId());
+        assertThat(first.isHasNext()).isTrue();
+        assertThat(queries.search(null, null, LoanScope.ALL, new PageQuery(1, 1)).getItems())
+                .extracting(LoanView::getId).containsExactly(current.getId());
+        assertThat(queries.search(null, null, LoanScope.ALL, new PageQuery(2, 1)).isHasNext()).isFalse();
+        assertThat(queries.search(null, null, LoanScope.ALL, new PageQuery(3, 1)).getItems()).isEmpty();
     }
 
-    private record Outcome(LoanView loan, ErrorCode error) {}
+    @Test
+    @DisplayName("MyBatis 时间映射不受 JVM 时区影响，空归还时间和微秒精度保留")
+    void utcMappingPreservesNullAndMicrosecondsInAnotherJvmTimezone() {
+        TimeZone original = TimeZone.getDefault();
+        try {
+            TimeZone.setDefault(TimeZone.getTimeZone("Asia/Shanghai"));
+            LoanView borrowed = service.borrow(1, 14);
+            Loan saved = loans.require(borrowed.getId());
+            assertThat(saved.getBorrowedAt()).isEqualTo(borrowed.getBorrowedAt());
+            assertThat(saved.getDueAt()).isEqualTo(borrowed.getDueAt());
+            assertThat(saved.getBorrowedAt().getNano() % 1000).isZero();
+            assertThat(saved.getReturnedAt()).isNull();
+            assertThat(database.borrowedLocalDateTime(saved.getId()))
+                    .isEqualTo(LocalDateTime.ofInstant(borrowed.getBorrowedAt(), ZoneOffset.UTC));
+            LoanView returned = service.returnLoan(1, borrowed.getId());
+            assertThat(loans.require(saved.getId()).getReturnedAt()).isEqualTo(returned.getReturnedAt());
+        } finally {
+            TimeZone.setDefault(original);
+        }
+    }
+
+    @Test
+    @DisplayName("实际提交及回滚完成后才释放借阅业务锁")
+    void businessLocksCloseAfterActualCommitOrRollback() {
+        LockHandle handle = mock(LockHandle.class);
+        doReturn(handle).when(locks).acquire(anyLong(), anyLong());
+        doAnswer(invocation -> {
+            assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
+            return null;
+        }).when(handle).close();
+        InOrder order = inOrder(locks, transactions, handle);
+
+        service.borrow(1, 14);
+        order.verify(locks).acquire(1, 14);
+        order.verify(transactions).begin();
+        order.verify(transactions).commit(any());
+        order.verify(handle).close();
+
+        doReturn(0).when(books).reserveOne(eq(13L), any());
+        assertBusiness(ErrorCode.BOOK_UNAVAILABLE, () -> service.borrow(1, 13));
+        order.verify(locks).acquire(1, 13);
+        order.verify(transactions).begin();
+        order.verify(transactions).rollback(any());
+        order.verify(handle).close();
+        assertThat(accounts.require(1).getActiveLoanCount()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("XML 图书查询保留字面通配符、大小写及 Unicode 空白处理")
+    void xmlBookSearchPreservesLiteralKeywordsAndWhitespace() throws Exception {
+        Book original = books.require(15);
+        try {
+            database.updateBookText(15, "Readable %_! Title", "MixedCase Author");
+            String keyword = URLEncoder.encode("\u2003 %_! \u2003", "UTF-8");
+            ApiClient.Result literal = api.request("GET", "/api/books?keyword=" + keyword, null, null);
+            assertThat(literal.getBody().path("items").size()).isEqualTo(1);
+            assertThat(literal.getBody().path("items").get(0).path("id").asLong()).isEqualTo(15);
+            ApiClient.Result author = api.request("GET", "/api/books?keyword=mixedcase", null, null);
+            assertThat(author.getBody().path("items").get(0).path("id").asLong()).isEqualTo(15);
+            String tooLong = String.join("", Collections.nCopies(256, "a"));
+            assertThat(api.request("GET", "/api/books?keyword=" + tooLong, null, null).getStatus()).isEqualTo(400);
+        } finally {
+            database.updateBookText(15, original.getTitle(), original.getAuthor());
+        }
+    }
+
+    private Map<String, Object> policyRequest(int limit, int days, long version) {
+        Map<String, Object> request = new LinkedHashMap<String, Object>();
+        request.put("maxActiveLoans", limit);
+        request.put("loanDays", days);
+        request.put("expectedVersion", version);
+        return request;
+    }
+
+    private void bypassLocks() {
+        doReturn(mock(LockHandle.class)).when(locks).acquire(anyLong(), anyLong());
+    }
+
+    private static final class Outcome {
+        private final LoanView loan;
+        private final ErrorCode error;
+
+        Outcome(LoanView loan, ErrorCode error) {
+            this.loan = loan;
+            this.error = error;
+        }
+
+        LoanView getLoan() {
+            return loan;
+        }
+
+        ErrorCode getError() {
+            return error;
+        }
+    }
 
     private List<Outcome> race(Supplier<LoanView> first, Supplier<LoanView> second) throws Exception {
         ExecutorService executor = Executors.newFixedThreadPool(2);
         CountDownLatch ready = new CountDownLatch(2);
         CountDownLatch start = new CountDownLatch(1);
         try {
-            var futures = List.of(first, second).stream().map(action -> executor.submit(() -> {
-                ready.countDown();
-                if (!start.await(5, TimeUnit.SECONDS)) throw new AssertionError("race gate timed out");
-                try { return new Outcome(action.get(), null); }
-                catch (BusinessException ex) { return new Outcome(null, ex.code()); }
-            })).toList();
+            List<Future<Outcome>> futures = new ArrayList<Future<Outcome>>();
+            for (Supplier<LoanView> action : Arrays.asList(first, second)) {
+                futures.add(executor.submit(() -> {
+                    ready.countDown();
+                    if (!start.await(5, TimeUnit.SECONDS)) {
+                        throw new AssertionError("race gate timed out");
+                    }
+                    try {
+                        return new Outcome(action.get(), null);
+                    } catch (BusinessException ex) {
+                        return new Outcome(null, ex.getCode());
+                    }
+                }));
+            }
             assertThat(ready.await(5, TimeUnit.SECONDS)).isTrue();
             start.countDown();
-            return List.of(futures.get(0).get(10, TimeUnit.SECONDS), futures.get(1).get(10, TimeUnit.SECONDS));
+            return Arrays.asList(futures.get(0).get(10, TimeUnit.SECONDS), futures.get(1).get(10, TimeUnit.SECONDS));
         } finally { start.countDown(); executor.shutdownNow(); }
     }
 
     private void assertBusiness(ErrorCode expected, Runnable action) {
         assertThatThrownBy(action::run).isInstanceOf(BusinessException.class)
-                .extracting(ex -> ((BusinessException) ex).code()).isEqualTo(expected);
+                .extracting(ex -> ((BusinessException) ex).getCode()).isEqualTo(expected);
     }
 }

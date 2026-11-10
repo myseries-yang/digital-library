@@ -14,7 +14,9 @@ import org.springframework.web.bind.annotation.*;
 @Tag(name = "Books / 图书")
 public class BookController {
     private final BookRepository books;
-    public BookController(BookRepository books) { this.books = books; }
+    public BookController(BookRepository books) {
+        this.books = books;
+    }
 
     @GetMapping
     @Operation(summary = "分页浏览图书", description = "按书名或作者包含匹配；page 从零开始，size 为 1–100。")
@@ -26,5 +28,7 @@ public class BookController {
 
     @GetMapping("/{bookId}")
     @Operation(summary = "查询图书详情")
-    public Book detail(@PathVariable @Positive long bookId) { return books.require(bookId); }
+    public Book detail(@PathVariable @Positive long bookId) {
+        return books.require(bookId);
+    }
 }

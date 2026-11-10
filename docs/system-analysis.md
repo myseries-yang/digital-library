@@ -253,7 +253,7 @@ sequenceDiagram
 
 该图展示成功路径。锁获取失败不进入修改数据的事务；事务内步骤失败则整体回滚，回滚完成后释放锁。
 
-外层应用入口负责锁且不被外部数据库事务包裹；内部使用 TransactionTemplate 明确拥有事务提交边界。不能加入一个尚未提交的外层事务，然后因内部方法返回而提前解锁。[Spring 事务模板](https://docs.spring.io/spring-framework/reference/6.2/data-access/transaction/programmatic.html)
+外层应用入口负责锁且不被外部数据库事务包裹；内部通过 CommandTransactions 调用 Spring PlatformTransactionManager，显式开启、提交或回滚事务。不能加入一个尚未提交的外层事务，然后因内部方法返回而提前解锁。[Spring 编程式事务](https://docs.spring.io/spring-framework/reference/data-access/transaction/programmatic.html)
 
 ### 6.2 事务步骤
 

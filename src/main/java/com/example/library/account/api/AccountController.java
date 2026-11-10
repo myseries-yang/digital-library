@@ -12,9 +12,13 @@ import java.util.List;
 @Tag(name = "Accounts / 图书馆账号")
 public class AccountController {
     private final AccountRepository accounts;
-    public AccountController(AccountRepository accounts) { this.accounts = accounts; }
+    public AccountController(AccountRepository accounts) {
+        this.accounts = accounts;
+    }
 
     @GetMapping("/api/accounts")
     @Operation(summary = "列出预置图书馆账号", description = "演示身份选择，不代表真实认证。")
-    public List<LibraryAccount> all() { return accounts.all(); }
+    public List<LibraryAccount> all() {
+        return accounts.all();
+    }
 }

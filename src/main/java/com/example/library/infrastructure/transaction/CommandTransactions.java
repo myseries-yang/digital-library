@@ -6,43 +6,46 @@ import com.example.library.infrastructure.error.ErrorCode;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.UnexpectedRollbackException;
+import org.springframework.transaction.support.DefaultTransactionDefinition;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
-import org.springframework.transaction.support.TransactionTemplate;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.function.Supplier;
 
-/** Owns the actual commit boundary, so locks can be released after execute returns. */
+/** 显式管理真实提交边界，调用方在提交或回滚完成后再释放业务锁。 */
 @Component
 public class CommandTransactions {
-    private final TransactionTemplate template;
+    private final PlatformTransactionManager manager;
+    private final DefaultTransactionDefinition definition;
 
     public CommandTransactions(PlatformTransactionManager manager, LibraryProperties properties) {
-        template = new TransactionTemplate(manager);
-        template.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
-        template.setTimeout(Math.toIntExact(properties.transactionTimeout().toSeconds()));
+        this.manager = manager;
+        this.definition = new DefaultTransactionDefinition();
+        definition.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
+        definition.setTimeout(Math.toIntExact(properties.getTransactionTimeout().getSeconds()));
     }
 
-    public <T> T execute(Supplier<T> action) {
+    public TransactionStatus begin() {
         if (TransactionSynchronizationManager.isActualTransactionActive()) {
             throw new IllegalStateException("借还用例不能被外部未提交事务包裹");
         }
-        AtomicBoolean callbackCompleted = new AtomicBoolean();
+        return manager.getTransaction(definition);
+    }
+
+    public void commit(TransactionStatus transaction) {
         try {
-            return template.execute(status -> {
-                T result = action.get();
-                callbackCompleted.set(true);
-                return result;
-            });
+            manager.commit(transaction);
         } catch (UnexpectedRollbackException ex) {
-            throw new BusinessException(ErrorCode.TRANSACTION_RETRYABLE, ErrorCode.TRANSACTION_RETRYABLE.message(), ex);
+            throw new BusinessException(ErrorCode.TRANSACTION_RETRYABLE,
+                    ErrorCode.TRANSACTION_RETRYABLE.getMessage(), ex);
         } catch (RuntimeException ex) {
-            if (callbackCompleted.get()) {
-                // The callback finished: this error belongs to commit/completion, not a rejected write.
-                throw new BusinessException(ErrorCode.COMMIT_OUTCOME_UNKNOWN,
-                        ErrorCode.COMMIT_OUTCOME_UNKNOWN.message(), ex);
-            }
-            throw ex;
+            throw new BusinessException(ErrorCode.COMMIT_OUTCOME_UNKNOWN,
+                    ErrorCode.COMMIT_OUTCOME_UNKNOWN.getMessage(), ex);
+        }
+    }
+
+    public void rollback(TransactionStatus transaction) {
+        if (!transaction.isCompleted()) {
+            manager.rollback(transaction);
         }
     }
 }

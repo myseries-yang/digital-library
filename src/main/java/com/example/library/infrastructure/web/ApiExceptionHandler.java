@@ -24,24 +24,32 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
 
     @ExceptionHandler(BusinessException.class)
     public ResponseEntity<ProblemDetail> business(BusinessException ex) {
-        if (ex.code().status() >= 500) log.error("operation_failed code={}", ex.code(), ex);
-        return response(ex.code(), ex.getMessage());
+        if (ex.getCode().getStatus() >= 500) {
+            log.error("operation_failed code={}", ex.getCode(), ex);
+        }
+        return response(ex.getCode(), ex.getMessage());
     }
 
     @ExceptionHandler(DataAccessException.class)
     public ResponseEntity<ProblemDetail> database(DataAccessException ex) {
-        ErrorCode code = ex instanceof TransientDataAccessException ? ErrorCode.TRANSACTION_RETRYABLE
-                : ex instanceof DataAccessResourceFailureException ? ErrorCode.DATABASE_UNAVAILABLE
-                : ex instanceof DataIntegrityViolationException ? ErrorCode.DATA_INCONSISTENCY
-                : ErrorCode.INTERNAL_ERROR;
+        ErrorCode code;
+        if (ex instanceof TransientDataAccessException) {
+            code = ErrorCode.TRANSACTION_RETRYABLE;
+        } else if (ex instanceof DataAccessResourceFailureException) {
+            code = ErrorCode.DATABASE_UNAVAILABLE;
+        } else if (ex instanceof DataIntegrityViolationException) {
+            code = ErrorCode.DATA_INCONSISTENCY;
+        } else {
+            code = ErrorCode.INTERNAL_ERROR;
+        }
         log.error("database_failed code={}", code, ex);
-        return response(code, code.message());
+        return response(code, code.getMessage());
     }
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ProblemDetail> unexpected(Exception ex) {
         log.error("unexpected_request_failure", ex);
-        return response(ErrorCode.INTERNAL_ERROR, ErrorCode.INTERNAL_ERROR.message());
+        return response(ErrorCode.INTERNAL_ERROR, ErrorCode.INTERNAL_ERROR.getMessage());
     }
 
     @Override
@@ -49,7 +57,8 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
                                                               HttpHeaders headers, HttpStatusCode status,
                                                               WebRequest request) {
         String detail = "请求格式或参数不正确，请检查字段类型与取值";
-        if (ex instanceof MethodArgumentNotValidException validation) {
+        if (ex instanceof MethodArgumentNotValidException) {
+            MethodArgumentNotValidException validation = (MethodArgumentNotValidException) ex;
             detail = validation.getBindingResult().getFieldErrors().stream()
                     .map(error -> error.getField() + ": " + error.getDefaultMessage())
                     .collect(Collectors.joining("; "));
@@ -61,8 +70,8 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
     }
 
     private ResponseEntity<ProblemDetail> response(ErrorCode code, String detail) {
-        return ResponseEntity.status(code.status()).contentType(MediaType.APPLICATION_PROBLEM_JSON)
-                .body(problem(code.status(), code.name(), detail));
+        return ResponseEntity.status(code.getStatus()).contentType(MediaType.APPLICATION_PROBLEM_JSON)
+                .body(problem(code.getStatus(), code.name(), detail));
     }
 
     private ProblemDetail problem(int status, String code, String detail) {

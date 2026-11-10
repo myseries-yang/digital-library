@@ -1,8 +1,10 @@
 # 阅界 · 电子图书馆
 
-Java 17 / Spring Boot 后端技术作业：浏览、详情、借阅、归还、当前借阅，以及读者和管理网页。
+Java 17 / Spring Boot / MyBatis 后端技术作业：浏览、详情、借阅、归还、当前借阅，以及读者和管理网页。
 
 按图书馆账号独立借阅，不关联自然人。默认每账号最多在借十本、借期十五天、同书最多一本。逾期不自动归还，仍占用数量；管理员可修改全局额度与借期，已有应还时间保持不变。
+
+源码采用 Java 8 常见写法：普通 JavaBean、显式类型、传统条件分支和清晰的业务方法。运行与编译仍使用 JDK 17。SQL 统一维护在 `src/main/resources/mapper` 的 XML 中，复杂联表和动态筛选直接查看对应 Mapper XML。代码阅读顺序与约定见 [技术方案](docs/technical-design.md#3-应用与接口)。
 
 ## 直接运行：只需要 JDK 17
 
@@ -111,8 +113,8 @@ curl http://localhost:8080/api/loans/current \
 
 每张业务表均有独立 id。不建立数据库 FOREIGN KEY；关联字段有中文注释，程序在事务内验证存在与匹配。current_loan 使用 INSERT SELECT，从真实、未归还且账号图书匹配的 loan 建立关系。唯一约束与数量 CHECK 保留。
 
-- Redis 互斥直接使用 Redisson RLock；数据访问、连接池、事务、迁移分别使用 Spring JDBC、HikariCP、Spring 事务、Flyway，不自写基础协议。
-- 先账号锁、再图书锁，反向释放；TransactionTemplate 真正提交或回滚完成后才解锁。
+- Redis 互斥直接使用 Redisson RLock；数据访问、连接池、事务、迁移分别使用 MyBatis、HikariCP、Spring 事务、Flyway。
+- 先账号锁、再图书锁，反向释放；通过 Spring 事务管理器显式开启、提交或回滚，事务完成后才解锁。
 - 数量变更使用带边界条件的原子 UPDATE，数据库保护不依赖 Redis 锁永不失效。
 - 归还先条件写入 returned_at，只有影响一行的事务才能释放数量，后续失败整体回滚。
 - 当前关系唯一约束允许保留多次借还历史。
@@ -122,7 +124,7 @@ curl http://localhost:8080/api/loans/current \
 
 ## 测试
 
-默认测试不需要 Docker：
+默认测试不需要 Docker。生产和测试的数据库操作都通过 MyBatis Mapper 与 XML 执行；测试专用 SQL 位于 `src/test/resources/mapper/test`，独立检查数量和关联一致性：
 
 ~~~sh
 ./mvnw test

@@ -28,6 +28,10 @@ public enum ErrorCode {
         this.message = message;
     }
 
-    public int status() { return status; }
-    public String message() { return message; }
+    public int getStatus() {
+        return status;
+    }
+    public String getMessage() {
+        return message;
+    }
 }

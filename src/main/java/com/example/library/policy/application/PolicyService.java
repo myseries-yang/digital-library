@@ -8,6 +8,7 @@ import com.example.library.policy.persistence.PolicyRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.TransactionStatus;
 import java.time.Clock;
 import java.time.DateTimeException;
 import java.time.ZoneOffset;
@@ -21,10 +22,14 @@ public class PolicyService {
     private final Clock clock;
 
     public PolicyService(PolicyRepository policies, CommandTransactions transactions, Clock clock) {
-        this.policies = policies; this.transactions = transactions; this.clock = clock;
+        this.policies = policies;
+        this.transactions = transactions;
+        this.clock = clock;
     }
 
-    public BorrowingPolicy current() { return policies.current(); }
+    public BorrowingPolicy current() {
+        return policies.current();
+    }
 
     public BorrowingPolicy update(int limit, int days, long expectedVersion) {
         BorrowingPolicy.validate(limit, days);
@@ -35,13 +40,19 @@ public class PolicyService {
         } catch (DateTimeException | ArithmeticException ex) {
             throw new BusinessException(ErrorCode.INVALID_ARGUMENT, "借期超出数据库支持的日期范围");
         }
-        BorrowingPolicy updated = transactions.execute(() -> {
+        TransactionStatus transaction = transactions.begin();
+        BorrowingPolicy updated;
+        try {
             if (policies.update(limit, days, expectedVersion, clock.instant()) != 1) {
                 throw new BusinessException(ErrorCode.POLICY_VERSION_CONFLICT);
             }
-            return policies.current();
-        });
-        log.info("policy_updated version={} maxActiveLoans={} loanDays={}", updated.version(), limit, days);
+            updated = policies.current();
+        } catch (RuntimeException | Error ex) {
+            transactions.rollback(transaction);
+            throw ex;
+        }
+        transactions.commit(transaction);
+        log.info("policy_updated version={} maxActiveLoans={} loanDays={}", updated.getVersion(), limit, days);
         return updated;
     }
 }

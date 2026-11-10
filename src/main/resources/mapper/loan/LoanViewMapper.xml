@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.library.loan.persistence.LoanViewMapper">
+    <sql id="selectView">
+        SELECT l.id, l.account_id, a.account_no, a.account_name, l.book_id, b.title AS book_title,
+               l.borrowed_at, l.due_at, l.returned_at
+        FROM loan l
+        JOIN library_account a ON a.id = l.account_id
+        JOIN book b ON b.id = l.book_id
+    </sql>
+
+    <select id="selectById" resultType="com.example.library.loan.application.LoanView">
+        <include refid="selectView"/> WHERE l.id = #{id}
+    </select>
+
+    <select id="search" resultType="com.example.library.loan.application.LoanView">
+        <include refid="selectView"/>
+        <where>
+            <if test="accountId != null">AND l.account_id = #{accountId}</if>
+            <if test="bookId != null">AND l.book_id = #{bookId}</if>
+            <choose>
+                <when test="scope.name() == 'CURRENT'">AND l.returned_at IS NULL</when>
+                <when test="scope.name() == 'OVERDUE'">
+                    AND l.returned_at IS NULL AND l.due_at &lt;= #{now}
+                </when>
+                <when test="scope.name() == 'RETURNED'">AND l.returned_at IS NOT NULL</when>
+            </choose>
+        </where>
+        ORDER BY l.id DESC LIMIT #{limit} OFFSET #{offset}
+    </select>
+</mapper>
