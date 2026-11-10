@@ -4,7 +4,7 @@ Java 17 / Spring Boot / MyBatis 后端技术作业：浏览、详情、借阅、
 
 按图书馆账号独立借阅，不关联自然人。默认每账号最多在借十本、借期十五天、同书最多一本。逾期不自动归还，仍占用数量；管理员可修改全局额度与借期，已有应还时间保持不变。
 
-源码采用 Java 8 常见写法：普通 JavaBean、显式类型、传统条件分支和清晰的业务方法。运行与编译仍使用 JDK 17。SQL 统一维护在 `src/main/resources/mapper` 的 XML 中，复杂联表和动态筛选直接查看对应 Mapper XML。代码阅读顺序与约定见 [技术方案](docs/technical-design.md#3-应用与接口)。
+代码阅读顺序与约定见 [技术方案](docs/technical-design.md#3-应用与接口)。
 
 ## 直接运行：只需要 JDK 17
 
@@ -12,12 +12,13 @@ Java 17 / Spring Boot / MyBatis 后端技术作业：浏览、详情、借阅、
 ./mvnw spring-boot:run
 ~~~
 
-| 入口 | 地址 |
-| --- | --- |
-| 读者页面 | http://localhost:8080 |
-| 管理页面 | http://localhost:8080/admin |
+
+| 入口       | 地址                                  |
+| ---------- | ------------------------------------- |
+| 读者页面   | http://localhost:8080                 |
+| 管理页面   | http://localhost:8080/admin           |
 | Swagger UI | http://localhost:8080/swagger-ui.html |
-| OpenAPI | http://localhost:8080/v3/api-docs |
+| OpenAPI    | http://localhost:8080/v3/api-docs     |
 
 默认 demo 模式使用 H2 文件数据库和 Java 本地锁，无需安装 MySQL、Redis 或 Node.js。首次需要联网下载 Maven 和依赖。数据保存在工作目录的 data/library.mv.db，重启不覆盖借阅及规则。Windows 使用 mvnw.cmd。
 
@@ -30,12 +31,13 @@ PORT 可调整端口，LIBRARY_DATA_PATH 可调整 H2 文件前缀。构建产�
 
 ## 演示数据
 
-| 账号 | 初始状态 | 可演示场景 |
-| --- | --- | --- |
-| LIB001 | 当前零本 | 正常借还、重复归还、重借 |
-| LIB002 | 当前九本 | 再借一本达到十本上限 |
+
+| 账号   | 初始状态     | 可演示场景                       |
+| ------ | ------------ | -------------------------------- |
+| LIB001 | 当前零本     | 正常借还、重复归还、重借         |
+| LIB002 | 当前九本     | 再借一本达到十本上限             |
 | LIB003 | 一笔逾期未还 | 逾期占用数量，但额度内仍可继续借 |
-| LIB004 | 一笔归还历史 | 管理查询历史 |
+| LIB004 | 一笔归还历史 | 管理查询历史                     |
 
 预置十五本书；图书 9 的唯一授权已借出，图书 14 初始只有一个可用名额。种子时间在首次迁移时生成，之后不会重置。
 
@@ -71,17 +73,18 @@ Redis 只用于锁，没有数据缓存。完整模式获取锁失败时拒绝�
 
 ## API 合约
 
-| 方法与路径 | 功能 |
-| --- | --- |
-| GET /api/accounts | 预置账号 |
-| GET /api/books?keyword=&page=0&size=20 | 按书名、作者分页浏览 |
-| GET /api/books/{bookId} | 图书详情 |
-| POST /api/loans | 借阅，请求体包含 bookId |
-| POST /api/loans/{loanId}/return | 按具体借阅记录幂等归还 |
-| GET /api/loans/current | 当前账号未归还借阅，含逾期 |
-| GET /api/borrowing-policy | 全局规则 |
-| GET /api/admin/loans | 按 accountId、bookId、scope 筛选 |
-| PUT /api/admin/borrowing-policy | 使用 expectedVersion 修改规则 |
+
+| 方法与路径                             | 功能                             |
+| -------------------------------------- | -------------------------------- |
+| GET /api/accounts                      | 预置账号                         |
+| GET /api/books?keyword=&page=0&size=20 | 按书名、作者分页浏览             |
+| GET /api/books/{bookId}                | 图书详情                         |
+| POST /api/loans                        | 借阅，请求体包含 bookId          |
+| POST /api/loans/{loanId}/return        | 按具体借阅记录幂等归还           |
+| GET /api/loans/current                 | 当前账号未归还借阅，含逾期       |
+| GET /api/borrowing-policy              | 全局规则                         |
+| GET /api/admin/loans                   | 按 accountId、bookId、scope 筛选 |
+| PUT /api/admin/borrowing-policy        | 使用 expectedVersion 修改规则    |
 
 借还及当前借阅需 X-Library-Account-Id。分页从零开始，size 默认20、最多100，结果为 items/page/size/hasNext。图书按 ID 升序，借阅按 ID 降序。管理 scope 为 ALL、CURRENT、OVERDUE、RETURNED；CURRENT 包含逾期。
 
@@ -103,13 +106,14 @@ curl http://localhost:8080/api/loans/current \
 
 ## 模型与一致性
 
-| 模型／表 | 职责 |
-| --- | --- |
-| LibraryAccount / library_account | 图书馆账号与当前数量 |
-| Book / book | 书目及有限授权名额 |
-| Loan / loan | 完整历史及规则快照 |
-| BorrowingPolicy / borrowing_policy | 全局规则及版本 |
-| current_loan | 当前关系及唯一约束 |
+
+| 模型／表                           | 职责                 |
+| ---------------------------------- | -------------------- |
+| LibraryAccount / library_account   | 图书馆账号与当前数量 |
+| Book / book                        | 书目及有限授权名额   |
+| Loan / loan                        | 完整历史及规则快照   |
+| BorrowingPolicy / borrowing_policy | 全局规则及版本       |
+| current_loan                       | 当前关系及唯一约束   |
 
 每张业务表均有独立 id。不建立数据库 FOREIGN KEY；关联字段有中文注释，程序在事务内验证存在与匹配。current_loan 使用 INSERT SELECT，从真实、未归还且账号图书匹配的 loan 建立关系。唯一约束与数量 CHECK 保留。
 
